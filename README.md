@@ -1,0 +1,5 @@
+- paper: https://gmd.copernicus.org/articles/16/2167/2023/
+- how to run?
+    - edit config.yaml
+    - run main.py
+    - if wanna compare or run multiple architectures at once, run compare_models.py
