@@ -94,8 +94,12 @@ def main():
        print("Evaluation complete")
       
        if 'distance_errors' in results:
+           mean_24h = results['distance_errors']['mean'][7]
+           print(f"24-hour forecast error: {mean_24h:.2f} km\n")
+           mean_48h = results['distance_errors']['mean'][15]
+           print(f"48-hour forecast error: {mean_48h:.2f} km\n")
            mean_72h = results['distance_errors']['mean'][-1]
-           print(f"\n72-hour forecast error: {mean_72h:.2f} km")
+           print(f"72-hour forecast error: {mean_72h:.2f} km")
   
    except Exception as e:
        print(f"Evaluation completed with warnings: {e}")

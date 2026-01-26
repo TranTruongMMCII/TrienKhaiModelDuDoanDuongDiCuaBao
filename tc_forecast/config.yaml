@@ -1,120 +1,122 @@
 # TC Forecast Configuration
-# allows dynamic configuration without changing code
-
 
 data:
- # CSV file path
-#  csv_path: "./../data/synthetic_data_large.csv"  # Use synthetic data for testing
- csv_path: "./../data/IBTrACS_Cleaned_Data.csv"  # Uncomment for real data
-  # Column names mapping - CHANGE THESE if your CSV has different headers
- columns:
-   storm_id: "STORM_ID"
-   name: "NAME"
-   timestamp: "ISO_TIME"
-   latitude: "LAT"
-   longitude: "LONG"
-   storm_direction: "STORM_DIR"
-   storm_speed: "STORM_SPEED"
-   wind_speed: "WMO_WIND"
-   pressure: "WMO_PRE"
-   landfall: "LANDFALL"
-  # Features to use for model input (must be numeric)
- feature_columns:
-   - "LAT"
-   - "LONG"
-   - "STORM_DIR"
-   - "STORM_SPEED"
-   - "WMO_WIND"
-   - "WMO_PRE"
-  # Temporal configuration
- sequence_length: 8          # Use 8 timesteps (24 hours) as input
- forecast_steps: 12          # Predict 12 timesteps (72 hours)
- time_interval: 3            # Data interval in hours
-  # Data splitting
- train_ratio: 0.8
- val_ratio: 0.1
- test_ratio: 0.1
-  # Normalization
- normalize: true
- normalization_method: "minmax"  # or "standard"
-
+  # Data sources: IBTrACS track data + atmospheric grids
+  ibtracs_path: "./../data/IBTrACS_Cleaned_Data.csv"
+  atmospheric_data_dir: "./../data/atmospheric_data_dir" # Folder containing sst.csv, u*.csv, v*.csv, z*.csv
+  columns:
+    storm_id: "STORM_ID"
+    name: "NAME"
+    timestamp: "ISO_TIME"
+    latitude: "LAT"
+    longitude: "LONG"
+    storm_direction: "STORM_DIR"
+    storm_speed: "STORM_SPEED"
+    wind_speed: "WMO_WIND"
+    pressure: "WMO_PRE"
+    landfall: "LANDFALL"
+  feature_columns:
+    - "LAT"
+    - "LONG"
+    - "sst"
+    - "u300"
+    - "u700"
+    - "u850"
+    - "v300"
+    - "v500"
+    - "v700"
+    - "v850"
+    - "z300"
+    - "z500"
+    - "z700"
+  sequence_length: 8
+  forecast_steps: 24 # Predict 24 steps = 72 hours
+  time_interval: 3 # Each step = 3 hours
+    # Key forecast hours for evaluation (24h, 48h, 72h)
+  key_forecast_hours: [24, 48, 72]
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  normalize: true
+  normalization_method: "minmax"
 
 model:
- type: "GRU_CNN"  # Options: "GRU", "CNN", "GRU_CNN"
-  # GRU parameters (used by GRU and GRU_CNN models)
- gru:
-   hidden_units: [128, 32]  # Two GRU layers
-   dropout: 0.2
-   recurrent_dropout: 0.0
-   return_sequences: [true, false]
-   activation: "relu"
-  # CNN parameters (used by CNN and GRU_CNN models)
- cnn:
-   filters: [64, 32]           # Number of filters for each Conv1D layer
-   kernel_sizes: [3, 3]        # Kernel size for each Conv1D layer
-   pool_sizes: [2, 2]          # MaxPooling size after each Conv1D
-   activation: "relu"
-   dropout: 0.2
-  # Dense layers after GRU/CNN/GRU_CNN
- dense:
-   units: [128, 64]
-   activation: "relu"
-   dropout: 0.3
-  # Output layer
- output:
-   units: 24  # 12 steps × 2 (lat, lon offsets)
-   activation: "linear"
-
+  type:
+    "GRU" # Options: "GRU", "CNN", "GRU_CNN"
+    # GRU parameters (used by GRU and GRU_CNN models)
+  gru:
+    hidden_units: [128, 32] # Two GRU layers
+    dropout: 0.2
+    recurrent_dropout: 0.0
+    return_sequences: [true, false]
+    activation: "relu"
+    # CNN parameters (used by CNN and GRU_CNN models)
+  cnn:
+    filters: [64, 32] # Number of filters for each Conv1D layer
+    kernel_sizes: [3, 3] # Kernel size for each Conv1D layer
+    pool_sizes: [2, 2] # MaxPooling size after each Conv1D
+    activation: "relu"
+    dropout: 0.2
+    # Dense layers after GRU/CNN/GRU_CNN
+  dense:
+    units: [128, 64]
+    activation: "relu"
+    dropout: 0.3
+    # Output layer
+  output:
+    units: 48 # 24 steps × 2 (lat, lon offsets)
+    activation: "linear"
 
 training:
- batch_size: 16
- epochs: 10
-  # Multi-optimizer strategy (like paper)
- optimizer:
-   type: "adam"
-   learning_rate:
-     initial: 0.001
-     decay_steps: 2280
-     decay_rate: 0.92
-     schedule: "exponential"  # or "step", "cosine"
-  # Loss function
- loss: "mse"  # mean_squared_error
- metrics: ["mae", "mse"]
-  # Callbacks
- callbacks:
-   early_stopping:
-     enabled: true
-     monitor: "val_loss"
-     patience: 10
-     restore_best_weights: true
-  
-   model_checkpoint:
-     enabled: true
-     monitor: "val_loss"
-     save_best_only: true
-     filepath: "./checkpoints/tc_forecast_best.h5"
-  
-   reduce_lr:
-     enabled: true
-     monitor: "val_loss"
-     factor: 0.5
-     patience: 5
-     min_lr: 0.0000001
+  batch_size: 16
+  epochs:
+    10
+    # Multi-optimizer strategy (like paper)
+  optimizer:
+    type: "adam"
+    learning_rate:
+      initial: 0.001
+      decay_steps: 2280
+      decay_rate: 0.92
+      schedule: "exponential" # or "step", "cosine"
+    # Loss function
+  loss: "mse" # mean_squared_error
+  metrics:
+    ["mae", "mse"]
+    # Callbacks
+  callbacks:
+    early_stopping:
+      enabled: true
+      monitor: "val_loss"
+      patience: 10
+      restore_best_weights: true
 
+    model_checkpoint:
+      enabled: true
+      monitor: "val_loss"
+      save_best_only: true
+      filepath: "./checkpoints/tc_forecast_best.h5"
+
+    reduce_lr:
+      enabled: true
+      monitor: "val_loss"
+      factor: 0.5
+      patience: 5
+      min_lr: 1e-7
 
 evaluation:
- # Metrics to calculate
- metrics:
-   - "rmse"  # Root Mean Squared Error
-   - "mae"   # Mean Absolute Error
-   - "distance_error"  # Haversine distance in km
-  # Error per forecast time
- per_timestep: true
-  # Visualization
- plot_results: true
- save_predictions: true
- output_path: "./results"
-
+  # Metrics to calculate
+  metrics:
+    - "rmse" # Root Mean Squared Error
+    - "mae" # Mean Absolute Error
+    - "distance_error" # Haversine distance in km
+    # Error per forecast time
+  per_timestep:
+    true
+    # Visualization
+  plot_results: false
+  save_predictions: true
+  output_path: "./results"
 
 # Reproducibility
 seed: 325

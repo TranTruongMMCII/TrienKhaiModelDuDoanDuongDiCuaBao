@@ -17,7 +17,41 @@ import math
 
 from .config import Config
 from .model import TCForecastModel
-from .utils import haversine_distance, offsets_to_coordinates
+
+
+
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+   """
+   Calculate great circle distance between two points on Earth
+  
+   Args:
+       lat1, lon1: First point coordinates
+       lat2, lon2: Second point coordinates
+      
+   Returns:
+       Distance in kilometers
+   """
+   ra = 6378.137  # Earth radius in km
+  
+   # Convert to radians
+   lat1_rad = math.radians(lat1)
+   lon1_rad = math.radians(lon1)
+   lat2_rad = math.radians(lat2)
+   lon2_rad = math.radians(lon2)
+  
+   # Haversine formula
+   dlat = lat2_rad - lat1_rad
+   dlon = lon2_rad - lon1_rad
+  
+   a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
+   c = 2 * math.asin(math.sqrt(a))
+  
+   distance = ra * c
+   return distance
+
+
+
 
 class TCTrainer:
    """
@@ -125,9 +159,7 @@ class TCTrainer:
        Returns:
            Training history
        """
-       print("=" * 60)
        print("Starting Model Training")
-       print("=" * 60)
       
        # Get model
        keras_model = self.model.get_model()
@@ -166,9 +198,7 @@ class TCTrainer:
            verbose=1
        )
       
-       print("\n" + "=" * 60)
        print("Training Complete!")
-       print("=" * 60)
       
        # Plot training history
        self._plot_training_history()
@@ -231,9 +261,7 @@ class TCTrainer:
        Returns:
            Dictionary with evaluation metrics
        """
-       print("\n" + "=" * 60)
        print("Model Evaluation")
-       print("=" * 60)
       
        # Make predictions
        y_pred = self.model.predict(X_test, batch_size=32)
@@ -280,9 +308,7 @@ class TCTrainer:
        if self.eval_config.save_predictions:
            self._save_predictions(y_pred_denorm, y_test_denorm, results)
       
-       print("\n" + "=" * 60)
        print("Evaluation Complete!")
-       print("=" * 60)
       
        return results
   
@@ -332,10 +358,19 @@ class TCTrainer:
        time_interval = self.config.data.time_interval
        print(f"\nDistance Errors (km) by Forecast Time:")
        print(f"{'Time (h)':>10} {'Mean Error':>15} {'Std':>12}")
-       print("-" * 40)
        for step, (mean_err, std_err) in enumerate(zip(mean_errors, std_errors)):
            forecast_hour = (step + 1) * time_interval
            print(f"{forecast_hour:>10} {mean_err:>15.2f} {std_err:>12.2f}")
+      
+       # Highlight key forecast hours if configured
+       key_hours = getattr(self.config.data, 'key_forecast_hours', None)
+       if key_hours:
+           print(f"KEY FORECAST HOURS SUMMARY:")
+           print(f"{'Time (h)':>10} {'Mean Error':>15} {'Std':>12}")
+           for target_hour in key_hours:
+               step_idx = (target_hour // time_interval) - 1
+               if 0 <= step_idx < len(mean_errors):
+                   print(f"{target_hour:>10} {mean_errors[step_idx]:>15.2f} {std_errors[step_idx]:>12.2f}")
       
        return {
            'mean': mean_errors,
@@ -371,6 +406,24 @@ class TCTrainer:
           
            rmse_per_step.append(rmse)
            mae_per_step.append(mae)
+      
+       # Print per-timestep summary
+       time_interval = self.config.data.time_interval
+       print(f"\nRMSE/MAE by Forecast Time:")
+       print(f"{'Time (h)':>10} {'RMSE':>12} {'MAE':>12}")
+       for step, (rmse_val, mae_val) in enumerate(zip(rmse_per_step, mae_per_step)):
+           forecast_hour = (step + 1) * time_interval
+           print(f"{forecast_hour:>10} {rmse_val:>12.4f} {mae_val:>12.4f}")
+      
+       # Highlight key forecast hours if configured
+       key_hours = getattr(self.config.data, 'key_forecast_hours', None)
+       if key_hours:
+           print(f"KEY FORECAST HOURS:")
+           print(f"{'Time (h)':>10} {'RMSE':>12} {'MAE':>12}")
+           for target_hour in key_hours:
+               step_idx = (target_hour // time_interval) - 1
+               if 0 <= step_idx < len(rmse_per_step):
+                   print(f"{target_hour:>10} {rmse_per_step[step_idx]:>12.4f} {mae_per_step[step_idx]:>12.4f}")
       
        return {
            'rmse': rmse_per_step,
