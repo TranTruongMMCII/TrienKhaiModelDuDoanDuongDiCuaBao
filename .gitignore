@@ -2,3 +2,4 @@
 __pycache__/
 results/*.json
 results/*.npz
+.vscode

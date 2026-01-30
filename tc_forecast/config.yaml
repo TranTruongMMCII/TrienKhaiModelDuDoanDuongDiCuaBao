@@ -1,122 +1,209 @@
 # TC Forecast Configuration
+# Based on: "Forecasting tropical cyclone tracks in the northwestern Pacific
+# based on a deep-learning model" (GMD, 2023)
+# Paper: https://gmd.copernicus.org/articles/16/2167/2023/
 
 data:
-  # Data sources: IBTrACS track data + atmospheric grids
-  ibtracs_path: "./../data/IBTrACS_Cleaned_Data.csv"
-  atmospheric_data_dir: "./../data/atmospheric_data_dir" # Folder containing sst.csv, u*.csv, v*.csv, z*.csv
+  # Data paths (relative to tc_forecast folder or absolute)
+  # IBTrACS track data
+  ibtracs_path:
+    '../IBTrACS_Cleaned_Data.csv'
+    # Atmospheric data directory containing CSV files with 2D grids
+  atmospheric_data_dir:
+    '../atmospheric_data'
+    # Column mappings for IBTrACS_Cleaned_Data.csv
   columns:
-    storm_id: "STORM_ID"
-    name: "NAME"
-    timestamp: "ISO_TIME"
-    latitude: "LAT"
-    longitude: "LONG"
-    storm_direction: "STORM_DIR"
-    storm_speed: "STORM_SPEED"
-    wind_speed: "WMO_WIND"
-    pressure: "WMO_PRE"
-    landfall: "LANDFALL"
-  feature_columns:
-    - "LAT"
-    - "LONG"
-    - "sst"
-    - "u300"
-    - "u700"
-    - "u850"
-    - "v300"
-    - "v500"
-    - "v700"
-    - "v850"
-    - "z300"
-    - "z500"
-    - "z700"
-  sequence_length: 8
-  forecast_steps: 24 # Predict 24 steps = 72 hours
-  time_interval: 3 # Each step = 3 hours
-    # Key forecast hours for evaluation (24h, 48h, 72h)
-  key_forecast_hours: [24, 48, 72]
-  train_ratio: 0.8
-  val_ratio: 0.1
-  test_ratio: 0.1
+    storm_id: 'STORM_ID'
+    name: 'NAME'
+    timestamp: 'ISO_TIME'
+    latitude: 'LAT'
+    longitude: 'LONG'
+    storm_direction: 'STORM_DIR'
+    storm_speed: 'STORM_SPEED'
+    wind_speed: 'WMO_WIND'
+    pressure: 'WMO_PRE'
+    landfall: 'LANDFALL'
+  # ===== 19 RAW FEATURES (computed from IBTrACS) =====
+  # These are derived from basic IBTrACS columns, not directly read
+  all_19_features:
+    - 'LAT' # Current latitude
+    - 'LON' # Current longitude
+    - 'WS' # Wind speed (knots)
+    - 'P' # Pressure (hPa)
+    - 'DIS' # Distance from last point (km)
+    - 'ANG' # Angle from equator (degrees)
+    - 'SPEED' # Storm translation speed (km/h)
+    - 'DIRECT' # Storm direction (degrees from north)
+    - 'F2' # Coriolis parameter (2*omega*sin(lat))
+    - 'DIF_LAT' # Change in latitude
+    - 'DIF_LON' # Change in longitude
+    - 'X_DIST' # East-west distance (km)
+    - 'Y_DIST' # North-south distance (km)
+    - 'U' # Zonal velocity component
+    - 'V' # Meridional velocity component
+    - 'DIF_WS' # Change in wind speed
+    - 'DIF_P' # Change in pressure
+    - 'DIF_SPEED' # Change in translation speed
+    - 'DIF_DIRECT' # Change in direction
+  # ===== TOP 11 FEATURES (selected by Random Forest) =====
+  # Importance ranking from paper: ANG > LON > DIF_DIRECT > X_DIST > DIF_LON > LAT > DIF_SPEED > F2 > Y_DIST > P > WS
+  top_11_features:
+    - 'ANG'
+    - 'LON'
+    - 'DIF_DIRECT'
+    - 'X_DIST'
+    - 'DIF_LON'
+    - 'LAT'
+    - 'DIF_SPEED'
+    - 'F2'
+    - 'Y_DIST'
+    - 'P'
+    - 'WS'
+  # Which feature set to use
+  # If true, use top 11 features; if false, use all 19
+  use_top_11: true
+  # Environmental data configuration
+  environmental:
+    # UV: Wind components at 4 pressure levels × 2 components = 8 channels
+    # Grid size: 21×21 around storm center (10°×10° area)
+    uv:
+      channels: 8
+      height: 21
+      width: 21
+      variables:
+        ['u300', 'u500', 'u700', 'u850', 'v300', 'v500', 'v700', 'v850']
+
+    # SST: Sea Surface Temperature - 1 channel
+    # Grid size: 21×21 around storm center
+    sst:
+      channels: 1
+      height: 21
+      width: 21
+
+    # Z: Geopotential height at 3 levels = 3 channels
+    # Grid size: 46×81 (larger area)
+    z:
+      channels: 3
+      height: 46
+      width: 81
+      variables: ['z300', 'z500', 'z700']
+  # Sequence configuration
+  sequence_length: 8 # 8 timesteps input (24 hours at 3h intervals)
+  forecast_steps: 12 # 12 forecast steps
+  time_interval: 6 # 6 hours between forecast outputs
+  max_forecast_hours: 72 # Maximum forecast horizon
+  # Key forecast hours for evaluation
+  key_forecast_hours: [24, 48, 72] # 24h, 48h, 72h forecasts
+  # Data split by year (paper methodology)
+  split_by_year: true
+  train_years: [1979, 2014] # Training: 1979-2014
+  val_years: [2015, 2018] # Validation: 2015-2018
+  test_years: [2019, 2021] # Test: 2019-2021
+  # Alternative ratio-based split (if split_by_year is false)
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  # Normalization
   normalize: true
-  normalization_method: "minmax"
+  normalization_method: 'minmax' # minmax or standard
 
 model:
-  type:
-    "GRU" # Options: "GRU", "CNN", "GRU_CNN"
-    # GRU parameters (used by GRU and GRU_CNN models)
+  type: 'GRU_CNN' # Options: "GRU", "GRU_CNN"
+  # ===== GRU Branch Configuration (for track data) =====
   gru:
-    hidden_units: [128, 32] # Two GRU layers
+    hidden_units: [128, 32]
     dropout: 0.2
     recurrent_dropout: 0.0
     return_sequences: [true, false]
-    activation: "relu"
-    # CNN parameters (used by CNN and GRU_CNN models)
-  cnn:
-    filters: [64, 32] # Number of filters for each Conv1D layer
-    kernel_sizes: [3, 3] # Kernel size for each Conv1D layer
-    pool_sizes: [2, 2] # MaxPooling size after each Conv1D
-    activation: "relu"
+    activation: 'relu'
+    learning_rate: 0.001 # Separate learning rate for GRU branch
+  # ===== CNN Branches Configuration (for environmental data) =====
+  # UV CNN: 8 input channels → Conv2D layers
+  cnn_uv:
+    filters: [32, 64, 128]
+    kernel_sizes: [[3, 3], [3, 3], [3, 3]]
+    pool_sizes: [[2, 2], [2, 2], [2, 2]]
+    activation: 'relu'
     dropout: 0.2
-    # Dense layers after GRU/CNN/GRU_CNN
+    learning_rate: 0.0001 # Lower LR for CNN branches
+  # SST CNN: 1 input channel
+  cnn_sst:
+    filters: [16, 32, 64]
+    kernel_sizes: [[3, 3], [3, 3], [3, 3]]
+    pool_sizes: [[2, 2], [2, 2], [2, 2]]
+    activation: 'relu'
+    dropout: 0.2
+    learning_rate: 0.0001
+  # Z (Geopotential) CNN: 3 input channels, larger grid (46×81)
+  cnn_z:
+    filters: [32, 64, 128]
+    kernel_sizes: [[3, 3], [3, 3], [3, 3]]
+    pool_sizes: [[2, 2], [2, 2], [2, 2]]
+    activation: 'relu'
+    dropout: 0.2
+    learning_rate: 0.0001
+  # Dense layers after concatenation
   dense:
     units: [128, 64]
-    activation: "relu"
+    activation: 'relu'
     dropout: 0.3
-    # Output layer
+  # Output layer: 12 steps × 2 (lat/lon offsets) = 24 values
   output:
-    units: 48 # 24 steps × 2 (lat, lon offsets)
-    activation: "linear"
+    units: 24 # 12 forecast steps × 2 (lat, lon)
+    activation: 'linear'
 
 training:
-  batch_size: 16
-  epochs:
-    10
-    # Multi-optimizer strategy (like paper)
+  batch_size: 32
+  epochs: 100
+  # Multi-optimizer configuration (paper uses different LR per branch)
+  use_multi_optimizer: true
   optimizer:
-    type: "adam"
+    type: 'adam'
+    # Global learning rate (used if use_multi_optimizer is false)
     learning_rate:
       initial: 0.001
-      decay_steps: 2280
+      decay_steps: 2280 # From paper
       decay_rate: 0.92
-      schedule: "exponential" # or "step", "cosine"
-    # Loss function
-  loss: "mse" # mean_squared_error
-  metrics:
-    ["mae", "mse"]
-    # Callbacks
+      schedule: 'exponential'
+  # Loss function
+  loss: 'mse'
+  metrics: ['mae', 'mse']
+  # Callbacks
   callbacks:
     early_stopping:
       enabled: true
-      monitor: "val_loss"
-      patience: 10
+      monitor: 'val_loss'
+      patience: 15
       restore_best_weights: true
 
     model_checkpoint:
       enabled: true
-      monitor: "val_loss"
+      monitor: 'val_loss'
       save_best_only: true
-      filepath: "./checkpoints/tc_forecast_best.h5"
+      filepath: './checkpoints/gru_cnn_best.weights.h5'
 
     reduce_lr:
       enabled: true
-      monitor: "val_loss"
+      monitor: 'val_loss'
       factor: 0.5
       patience: 5
       min_lr: 1e-7
 
 evaluation:
-  # Metrics to calculate
   metrics:
-    - "rmse" # Root Mean Squared Error
-    - "mae" # Mean Absolute Error
-    - "distance_error" # Haversine distance in km
-    # Error per forecast time
-  per_timestep:
-    true
-    # Visualization
-  plot_results: false
+    - 'rmse'
+    - 'mae'
+    - 'distance_error' # Haversine distance in km
+  per_timestep: true
+  plot_results: true
   save_predictions: true
-  output_path: "./results"
+  output_path: './results'
 
 # Reproducibility
 seed: 325
+
+# Physical constants
+constants:
+  earth_radius_km: 6371.0
+  omega: 0.00007292 # Earth's angular velocity (rad/s)
+
