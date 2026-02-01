@@ -391,7 +391,7 @@ class TCDataLoader:
             return result
 
         # ===== Load SST data =====
-        sst_path = Path(atmos_dir) / 'sst.csv'
+        sst_path = Path(atmos_dir) / 'sst/sst.csv'
         if sst_path.exists():
             print(f"Loading SST data from: {sst_path}")
             sst_data = load_atmospheric_csv(str(sst_path), 'SST')
@@ -406,7 +406,7 @@ class TCDataLoader:
                     'u850', 'v300', 'v500', 'v700', 'v850']
         uv_data = {}
         for uv_file in uv_files:
-            uv_path = Path(atmos_dir) / f'{uv_file}.csv'
+            uv_path = Path(atmos_dir) / f'uv/{uv_file}.csv'
             if uv_path.exists():
                 print(f"Loading {uv_file} data...")
                 uv_data[uv_file] = load_atmospheric_csv(str(uv_path), 'VALUE')
@@ -419,7 +419,7 @@ class TCDataLoader:
         z_files = ['z300', 'z500', 'z700']
         z_data = {}
         for z_file in z_files:
-            z_path = Path(atmos_dir) / f'{z_file}.csv'
+            z_path = Path(atmos_dir) / f'z/{z_file}.csv'
             if z_path.exists():
                 print(f"Loading {z_file} data...")
                 z_data[z_file] = load_atmospheric_csv(str(z_path), 'VALUE')
