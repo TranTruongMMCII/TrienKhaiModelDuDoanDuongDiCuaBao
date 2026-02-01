@@ -2,10 +2,8 @@
 Data loading and preprocessing module
 Handles CSV reading, sequence creation, and normalization
 
-
-Based on: "Forecasting tropical cyclone tracks in the northwestern Pacific
+Based on: "Forecasting tropical cyclone tracks in the northwestern Pacific 
 based on a deep-learning model" (GMD, 2023)
-
 
 Key methodology from paper:
 1. Compute 19 derived features from IBTrACS data
@@ -14,7 +12,6 @@ Key methodology from paper:
 4. Create 8-timestep sequences for GRU-CNN model
 """
 
-
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -22,14 +19,12 @@ from typing import Tuple, List, Optional, Dict, Union
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import warnings
 
-
 from .config import Config, resolve_path
 
 
 # ============================================================================
 # DISTANCE AND ANGLE CALCULATION (from original source code)
 # ============================================================================
-
 
 def get_distance(lat1: float, lon1: float, lat2: float, lon2: float,
                  R: float = 6371.0) -> Tuple[float, float]:
@@ -363,66 +358,75 @@ class TCDataLoader:
                 print(f"Error parsing grid string: {e}")
                 return None
 
-        def load_atmospheric_csv(csv_path: str, value_col: str = None) -> Dict[str, np.ndarray]:
-            """Load atmospheric CSV and return dict keyed by STORM_ID+ISO_TIME."""
+        def load_atmospheric_csv_by_coords(csv_path: str, value_col: str = None) -> Dict[str, np.ndarray]:
+            """Load atmospheric CSV keyed by STORM_ID_LAT_LONG_ISO_TIME for UV/Z data."""
             if not Path(csv_path).exists():
                 return {}
 
             df = pd.read_csv(csv_path)
 
-            # Determine value column
             if value_col is None:
-                if 'SST' in df.columns:
-                    value_col = 'SST'
-                elif 'VALUE' in df.columns:
+                if 'VALUE' in df.columns:
                     value_col = 'VALUE'
                 else:
-                    # Find the last column (should be the grid data)
                     value_col = df.columns[-1]
 
             result = {}
             for _, row in df.iterrows():
-                # Create key from STORM_ID and ISO_TIME
-                key = f"{row['STORM_ID']}_{row['ISO_TIME']}"
+                # Key includes LAT/LONG for precise matching
+                lat = round(row['LAT'], 1)
+                lon = round(row['LONG'], 1)
+                key = f"{row['STORM_ID']}_{lat}_{lon}_{row['ISO_TIME']}"
                 grid = parse_grid_string(row[value_col])
                 if grid is not None:
                     result[key] = grid
 
             return result
 
-        # ===== Load SST data =====
-        sst_path = Path(atmos_dir) / 'sst/sst.csv'
-        if sst_path.exists():
-            print(f"Loading SST data from: {sst_path}")
-            sst_data = load_atmospheric_csv(str(sst_path), 'SST')
-            if sst_data:
-                # Store as dict for later alignment with track data
-                env_data['sst_dict'] = sst_data
-                print(f"Loaded SST data for {len(sst_data)} records")
+        def load_sst_dataframe(csv_path: str) -> pd.DataFrame:
+            """Load SST CSV as DataFrame for nearest neighbor lookup."""
+            if not Path(csv_path).exists():
+                return None
 
-        # ===== Load UV data (wind components) =====
-        # UV files: u300, u500, u700, u850, v300, v500, v700, v850
+            df = pd.read_csv(csv_path)
+            # Pre-parse grid data
+            df['grid'] = df['SST'].apply(parse_grid_string)
+            df = df[df['grid'].notna()].reset_index(drop=True)
+            return df
+
+        # ===== Load SST data (nearest neighbor lookup) =====
+        sst_path = Path(atmos_dir) / 'sst.csv'
+        if sst_path.exists():
+            print(f"Loading SST data from: {sst_path} (nearest neighbor mode)")
+            sst_df = load_sst_dataframe(str(sst_path))
+            if sst_df is not None and len(sst_df) > 0:
+                env_data['sst_df'] = sst_df
+                print(f"Loaded SST data for {len(sst_df)} records")
+
+        # ===== Load UV data (wind components) - keyed by STORM_ID+LAT+LONG+TIME =====
         uv_files = ['u300', 'u500', 'u700',
                     'u850', 'v300', 'v500', 'v700', 'v850']
         uv_data = {}
         for uv_file in uv_files:
-            uv_path = Path(atmos_dir) / f'uv/{uv_file}.csv'
+            uv_path = Path(atmos_dir) / f'{uv_file}.csv'
             if uv_path.exists():
                 print(f"Loading {uv_file} data...")
-                uv_data[uv_file] = load_atmospheric_csv(str(uv_path), 'VALUE')
+                uv_data[uv_file] = load_atmospheric_csv_by_coords(
+                    str(uv_path), 'VALUE')
 
         if uv_data:
             env_data['uv_dict'] = uv_data
             print(f"Loaded UV data: {list(uv_data.keys())}")
 
-        # ===== Load Z data (geopotential height) =====
+        # ===== Load Z data (geopotential height) - keyed by STORM_ID+LAT+LONG+TIME =====
         z_files = ['z300', 'z500', 'z700']
         z_data = {}
         for z_file in z_files:
-            z_path = Path(atmos_dir) / f'z/{z_file}.csv'
+            z_path = Path(atmos_dir) / f'{z_file}.csv'
             if z_path.exists():
                 print(f"Loading {z_file} data...")
-                z_data[z_file] = load_atmospheric_csv(str(z_path), 'VALUE')
+                z_data[z_file] = load_atmospheric_csv_by_coords(
+                    str(z_path), 'VALUE')
 
         if z_data:
             env_data['z_dict'] = z_data
@@ -526,10 +530,12 @@ class TCDataLoader:
         """
         Create environmental data sequences aligned with track sequences.
 
-        This aligns atmospheric data with track sequences using STORM_ID and ISO_TIME.
+        Matching strategy (per data creator):
+        - UV, Z: Match by STORM_ID + LAT + LONG + ISO_TIME (exact)
+        - SST: Find nearest neighbor by LAT/LONG (different organization)
 
         Args:
-            env_data: Dict with 'sst_dict', 'uv_dict', 'z_dict' from load_environmental_data
+            env_data: Dict with 'sst_df', 'uv_dict', 'z_dict' from load_environmental_data
             df: Track DataFrame with STORM_ID and ISO_TIME columns
             metadata: Metadata from create_track_sequences containing sequence info
 
@@ -538,50 +544,68 @@ class TCDataLoader:
         """
         sid_col = self.data_config.columns.storm_id
         time_col = self.data_config.columns.timestamp
+        lat_col = self.data_config.columns.latitude
+        lon_col = self.data_config.columns.longitude
 
         env_sequences = {}
 
-        # ===== Process SST data =====
-        if 'sst_dict' in env_data:
-            sst_dict = env_data['sst_dict']
+        # ===== Process SST data (NEAREST NEIGHBOR) =====
+        if 'sst_df' in env_data:
+            sst_df = env_data['sst_df']
             sst_list = []
+            matched_sst = 0
 
             for m in metadata:
                 storm_id = m['storm_id']
-                # Get the row index from metadata
                 seq_start_idx = m.get('seq_start_idx', 0)
-
-                # Find matching SST data for this sequence
-                # Use the last point of the sequence (8 timesteps)
                 seq_length = self.data_config.sequence_length
                 target_idx = seq_start_idx + seq_length - 1
 
-                # Get timestamp from DataFrame
                 storm_df = df[df[sid_col] == storm_id].reset_index(drop=True)
-                if target_idx < len(storm_df):
-                    iso_time = storm_df.iloc[target_idx][time_col]
-                    key = f"{storm_id}_{iso_time}"
 
-                    if key in sst_dict:
-                        sst_list.append(sst_dict[key])
+                if target_idx < len(storm_df):
+                    target_lat = storm_df.iloc[target_idx][lat_col]
+                    target_lon = storm_df.iloc[target_idx][lon_col]
+
+                    # Find nearest SST record by lat/lon distance
+                    sst_storm = sst_df[sst_df['STORM_ID'] == storm_id]
+
+                    if len(sst_storm) > 0:
+                        # Calculate distances
+                        distances = np.sqrt(
+                            (sst_storm['LAT'] - target_lat)**2 +
+                            (sst_storm['LONG'] - target_lon)**2
+                        )
+                        nearest_idx = distances.idxmin()
+                        grid = sst_storm.loc[nearest_idx, 'grid']
+
+                        if grid is not None and isinstance(grid, np.ndarray):
+                            sst_list.append(grid)
+                            matched_sst += 1
+                        else:
+                            sst_list.append(
+                                np.zeros((21, 21), dtype=np.float32))
                     else:
-                        # Use zeros if not found
                         sst_list.append(np.zeros((21, 21), dtype=np.float32))
                 else:
                     sst_list.append(np.zeros((21, 21), dtype=np.float32))
 
             if sst_list:
-                # Shape: (n_samples, 1, 21, 21) - add channel dimension
                 env_sequences['sst'] = np.array(sst_list)[:, np.newaxis, :, :]
-                print(f"SST sequences shape: {env_sequences['sst'].shape}")
+                match_pct = matched_sst / \
+                    len(sst_list) * 100 if sst_list else 0
+                print(
+                    f"SST sequences shape: {env_sequences['sst'].shape}, matched: {match_pct:.1f}%")
 
-        # ===== Process UV data =====
+        # ===== Process UV data (EXACT MATCH by STORM_ID+LAT+LONG+TIME) =====
         if 'uv_dict' in env_data:
             uv_dict = env_data['uv_dict']
             uv_vars = ['u300', 'u500', 'u700', 'u850',
                        'v300', 'v500', 'v700', 'v850']
 
             uv_list = []
+            matched_uv = 0
+
             for m in metadata:
                 storm_id = m['storm_id']
                 seq_start_idx = m.get('seq_start_idx', 0)
@@ -591,13 +615,19 @@ class TCDataLoader:
                 storm_df = df[df[sid_col] == storm_id].reset_index(drop=True)
 
                 channels = []
+                sample_matched = False
+
                 if target_idx < len(storm_df):
-                    iso_time = storm_df.iloc[target_idx][time_col]
-                    key = f"{storm_id}_{iso_time}"
+                    row = storm_df.iloc[target_idx]
+                    iso_time = row[time_col]
+                    lat = round(row[lat_col], 1)
+                    lon = round(row[lon_col], 1)
+                    key = f"{storm_id}_{lat}_{lon}_{iso_time}"
 
                     for var in uv_vars:
                         if var in uv_dict and key in uv_dict[var]:
                             channels.append(uv_dict[var][key])
+                            sample_matched = True
                         else:
                             channels.append(
                                 np.zeros((21, 21), dtype=np.float32))
@@ -605,20 +635,23 @@ class TCDataLoader:
                     channels = [np.zeros((21, 21), dtype=np.float32)
                                 for _ in uv_vars]
 
+                if sample_matched:
+                    matched_uv += 1
                 uv_list.append(np.stack(channels, axis=0))
 
             if uv_list:
-                # Shape: (n_samples, 8, 21, 21)
                 env_sequences['uv'] = np.array(uv_list)
-                print(f"UV sequences shape: {env_sequences['uv'].shape}")
+                match_pct = matched_uv / len(uv_list) * 100 if uv_list else 0
+                print(
+                    f"UV sequences shape: {env_sequences['uv'].shape}, matched: {match_pct:.1f}%")
 
-        # ===== Process Z data =====
+        # ===== Process Z data (EXACT MATCH by STORM_ID+LAT+LONG+TIME) =====
         if 'z_dict' in env_data:
             z_dict = env_data['z_dict']
             z_vars = ['z300', 'z500', 'z700']
 
             # Determine Z grid size from actual data
-            z_height, z_width = 46, 81  # Default from paper
+            z_height, z_width = 46, 81
             for var in z_vars:
                 if var in z_dict and len(z_dict[var]) > 0:
                     sample = list(z_dict[var].values())[0]
@@ -626,6 +659,8 @@ class TCDataLoader:
                     break
 
             z_list = []
+            matched_z = 0
+
             for m in metadata:
                 storm_id = m['storm_id']
                 seq_start_idx = m.get('seq_start_idx', 0)
@@ -635,27 +670,35 @@ class TCDataLoader:
                 storm_df = df[df[sid_col] == storm_id].reset_index(drop=True)
 
                 channels = []
+                sample_matched = False
+
                 if target_idx < len(storm_df):
-                    iso_time = storm_df.iloc[target_idx][time_col]
-                    key = f"{storm_id}_{iso_time}"
+                    row = storm_df.iloc[target_idx]
+                    iso_time = row[time_col]
+                    lat = round(row[lat_col], 1)
+                    lon = round(row[lon_col], 1)
+                    key = f"{storm_id}_{lat}_{lon}_{iso_time}"
 
                     for var in z_vars:
                         if var in z_dict and key in z_dict[var]:
                             channels.append(z_dict[var][key])
+                            sample_matched = True
                         else:
-                            # Use correct grid size for Z data
                             channels.append(
                                 np.zeros((z_height, z_width), dtype=np.float32))
                 else:
                     channels = [
                         np.zeros((z_height, z_width), dtype=np.float32) for _ in z_vars]
 
+                if sample_matched:
+                    matched_z += 1
                 z_list.append(np.stack(channels, axis=0))
 
             if z_list:
-                # Shape: (n_samples, 3, H, W)
                 env_sequences['z'] = np.array(z_list)
-                print(f"Z sequences shape: {env_sequences['z'].shape}")
+                match_pct = matched_z / len(z_list) * 100 if z_list else 0
+                print(
+                    f"Z sequences shape: {env_sequences['z'].shape}, matched: {match_pct:.1f}%")
 
         return env_sequences
 
@@ -935,6 +978,7 @@ class TCDataLoader:
 # ============================================================================
 # LEGACY SUPPORT - Keep old methods for backward compatibility
 # ============================================================================
+
 
     def load_multiple_csvs(self, atmospheric_data_dir: str = None) -> pd.DataFrame:
         """
