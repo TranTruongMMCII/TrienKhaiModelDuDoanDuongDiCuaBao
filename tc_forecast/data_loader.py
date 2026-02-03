@@ -389,8 +389,9 @@ class TCDataLoader:
                 return None
 
             df = pd.read_csv(csv_path)
-            # Pre-parse grid data
-            df['grid'] = df['SST'].apply(parse_grid_string)
+            # Determine value column (SST or VALUE)
+            value_col = 'SST' if 'SST' in df.columns else 'VALUE'
+            df['grid'] = df[value_col].apply(parse_grid_string)
             df = df[df['grid'].notna()].reset_index(drop=True)
             return df
 
