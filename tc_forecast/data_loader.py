@@ -346,6 +346,19 @@ class TCDataLoader:
 
         print(f"Loading atmospheric data from: {atmos_dir}")
 
+        def ensure_grid_shape(grid: np.ndarray, target_shape=(21, 21)) -> np.ndarray:
+            """Ensure grid has the target shape by padding or cropping."""
+            if grid is None:
+                return np.zeros(target_shape, dtype=np.float32)
+            if grid.shape == target_shape:
+                return grid
+            # Create output array
+            result = np.zeros(target_shape, dtype=np.float32)
+            # Copy as much as fits
+            h, w = min(grid.shape[0], target_shape[0]), min(grid.shape[1], target_shape[1])
+            result[:h, :w] = grid[:h, :w]
+            return result
+
         def parse_grid_string(grid_str: str) -> np.ndarray:
             """Parse a string representation of 2D array into numpy array."""
             try:
@@ -353,7 +366,8 @@ class TCDataLoader:
                     return None
                 # Parse the string as Python literal
                 grid_list = ast.literal_eval(grid_str)
-                return np.array(grid_list, dtype=np.float32)
+                grid = np.array(grid_list, dtype=np.float32)
+                return ensure_grid_shape(grid)
             except Exception as e:
                 print(f"Error parsing grid string: {e}")
                 return None
