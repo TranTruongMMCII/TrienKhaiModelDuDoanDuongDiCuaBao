@@ -363,7 +363,11 @@ class TCDataLoader:
             if not Path(csv_path).exists():
                 return {}
 
-            df = pd.read_csv(csv_path)
+            try:
+                df = pd.read_csv(csv_path, on_bad_lines='skip')
+            except Exception as e:
+                print(f"Error reading {csv_path}: {e}")
+                return {}
 
             if value_col is None:
                 if 'VALUE' in df.columns:
