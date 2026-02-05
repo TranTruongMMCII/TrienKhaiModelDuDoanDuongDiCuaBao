@@ -2,7 +2,7 @@
 Data loading and preprocessing module
 Handles CSV reading, sequence creation, and normalization
 
-Based on: "Forecasting tropical cyclone tracks in the northwestern Pacific 
+Based on: "Forecasting tropical cyclone tracks in the northwestern Pacific
 based on a deep-learning model" (GMD, 2023)
 
 Key methodology from paper:
@@ -318,11 +318,11 @@ class TCDataLoader:
         """
         Load environmental data (UV, SST, Z) from CSV files.
 
-        Your data format:
-        - atmospheric_data/sst.csv: SST grids (21×21)
-        - atmospheric_data/u300.csv, u500.csv, etc.: Wind U component at different levels
-        - atmospheric_data/v300.csv, v500.csv, etc.: Wind V component at different levels
-        - atmospheric_data/z300.csv, z500.csv, z700.csv: Geopotential height
+
+        Supports two directory structures:
+        1. Flat: atmospheric_data/sst/, atmospheric_data/uv/, atmospheric_data/z/
+        2. Period-based: atmospheric_data/2020-2024/sst/, atmospheric_data/2025-2029/sst/, etc.
+
 
         Each CSV has columns: RECORD_ID, STORM_ID, NAME, ISO_TIME, LAT, LONG, VALUE/SST
         where VALUE/SST contains 2D grid as string "[[...], [...], ...]"
@@ -346,6 +346,21 @@ class TCDataLoader:
 
         print(f"Loading atmospheric data from: {atmos_dir}")
 
+        # Detect period folders (e.g., 2020-2024, 2025-2029) or use flat structure
+        period_folders = []
+        for item in Path(atmos_dir).iterdir():
+            if item.is_dir() and '-' in item.name and item.name[0].isdigit():
+                period_folders.append(item)
+
+        if period_folders:
+            period_folders.sort(key=lambda x: x.name)
+            print(
+                f"Detected period folders: {[p.name for p in period_folders]}")
+            data_dirs = period_folders
+        else:
+            # Flat structure - use atmos_dir directly
+            data_dirs = [Path(atmos_dir)]
+
         def ensure_grid_shape(grid: np.ndarray, target_shape=(21, 21)) -> np.ndarray:
             """Ensure grid has the target shape by padding or cropping."""
             if grid is None:
@@ -355,7 +370,8 @@ class TCDataLoader:
             # Create output array
             result = np.zeros(target_shape, dtype=np.float32)
             # Copy as much as fits
-            h, w = min(grid.shape[0], target_shape[0]), min(grid.shape[1], target_shape[1])
+            h, w = min(grid.shape[0], target_shape[0]), min(
+                grid.shape[1], target_shape[1])
             result[:h, :w] = grid[:h, :w]
             return result
 
@@ -406,47 +422,68 @@ class TCDataLoader:
             if not Path(csv_path).exists():
                 return None
 
-            df = pd.read_csv(csv_path)
+            df = pd.read_csv(csv_path, on_bad_lines='skip')
             # Determine value column (SST or VALUE)
             value_col = 'SST' if 'SST' in df.columns else 'VALUE'
             df['grid'] = df[value_col].apply(parse_grid_string)
             df = df[df['grid'].notna()].reset_index(drop=True)
             return df
 
-        # ===== Load SST data (nearest neighbor lookup) =====
-        sst_path = Path(atmos_dir) / 'sst/sst.csv'
-        if sst_path.exists():
-            print(f"Loading SST data from: {sst_path} (nearest neighbor mode)")
-            sst_df = load_sst_dataframe(str(sst_path))
-            if sst_df is not None and len(sst_df) > 0:
-                env_data['sst_df'] = sst_df
-                print(f"Loaded SST data for {len(sst_df)} records")
+        # ===== Load SST data from all data directories =====
+        sst_dfs = []
+        for data_dir in data_dirs:
+            sst_path = data_dir / 'sst/sst.csv'
+            if sst_path.exists():
+                print(f"Loading SST from: {sst_path}")
+                sst_df = load_sst_dataframe(str(sst_path))
+                if sst_df is not None and len(sst_df) > 0:
+                    sst_dfs.append(sst_df)
+                    print(f"  -> {len(sst_df)} records")
 
-        # ===== Load UV data (wind components) - keyed by STORM_ID+LAT+LONG+TIME =====
+        if sst_dfs:
+            combined_sst = pd.concat(sst_dfs, ignore_index=True)
+            env_data['sst_df'] = combined_sst
+            print(f"Total SST records: {len(combined_sst)}")
+
+        # ===== Load UV data from all data directories =====
         uv_files = ['u300', 'u500', 'u700',
                     'u850', 'v300', 'v500', 'v700', 'v850']
         uv_data = {}
         for uv_file in uv_files:
-            uv_path = Path(atmos_dir) / f'uv/{uv_file}.csv'
-            if uv_path.exists():
-                print(f"Loading {uv_file} data...")
-                uv_data[uv_file] = load_atmospheric_csv_by_coords(
-                    str(uv_path), 'VALUE')
+            uv_data[uv_file] = {}
 
+        for data_dir in data_dirs:
+            for uv_file in uv_files:
+                uv_path = data_dir / f'uv/{uv_file}.csv'
+                if uv_path.exists():
+                    print(f"Loading {uv_file} from: {data_dir.name}")
+                    file_data = load_atmospheric_csv_by_coords(
+                        str(uv_path), 'VALUE')
+                    uv_data[uv_file].update(file_data)
+
+        # Remove empty entries
+        uv_data = {k: v for k, v in uv_data.items() if v}
         if uv_data:
             env_data['uv_dict'] = uv_data
             print(f"Loaded UV data: {list(uv_data.keys())}")
 
-        # ===== Load Z data (geopotential height) - keyed by STORM_ID+LAT+LONG+TIME =====
+        # ===== Load Z data from all data directories =====
         z_files = ['z300', 'z500', 'z700']
         z_data = {}
         for z_file in z_files:
-            z_path = Path(atmos_dir) / f'z/{z_file}.csv'
-            if z_path.exists():
-                print(f"Loading {z_file} data...")
-                z_data[z_file] = load_atmospheric_csv_by_coords(
-                    str(z_path), 'VALUE')
+            z_data[z_file] = {}
 
+        for data_dir in data_dirs:
+            for z_file in z_files:
+                z_path = data_dir / f'z/{z_file}.csv'
+                if z_path.exists():
+                    print(f"Loading {z_file} from: {data_dir.name}")
+                    file_data = load_atmospheric_csv_by_coords(
+                        str(z_path), 'VALUE')
+                    z_data[z_file].update(file_data)
+
+        # Remove empty entries
+        z_data = {k: v for k, v in z_data.items() if v}
         if z_data:
             env_data['z_dict'] = z_data
             print(f"Loaded Z data: {list(z_data.keys())}")

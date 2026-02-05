@@ -6,12 +6,11 @@
 data:
   # Data paths (relative to tc_forecast folder or absolute)
   # IBTrACS track data
-  ibtracs_path:
-    '../IBTrACS_Cleaned_Data.csv'
-    # Atmospheric data directory containing CSV files with 2D grids
-  atmospheric_data_dir:
-    '../atmospheric_data'
-    # Column mappings for IBTrACS_Cleaned_Data.csv
+  ibtracs_path: '../data/IBTrACS_Cleaned_Data_v2.csv'
+  # Atmospheric data directory containing period folders (2020-2024, 2025-2029, etc.)
+  # Each period folder has sst/, uv/, z/ subfolders
+  atmospheric_data_dir: '../data'
+  # Column mappings for IBTrACS_Cleaned_Data.csv
   columns:
     storm_id: 'STORM_ID'
     name: 'NAME'
@@ -96,9 +95,9 @@ data:
   key_forecast_hours: [24, 48, 72] # 24h, 48h, 72h forecasts
   # Data split by year (paper methodology)
   split_by_year: true
-  train_years: [1979, 2014] # Training: 1979-2014
-  val_years: [2015, 2018] # Validation: 2015-2018
-  test_years: [2019, 2021] # Test: 2019-2021
+  train_years: [2020, 2023] # Training: 2020-2023
+  val_years: [2024, 2024] # Validation: 2024
+  test_years: [2025, 2026] # Test: 2025-2026
   # Alternative ratio-based split (if split_by_year is false)
   train_ratio: 0.7
   val_ratio: 0.15
@@ -206,4 +205,3 @@ seed: 325
 constants:
   earth_radius_km: 6371.0
   omega: 0.00007292 # Earth's angular velocity (rad/s)
-
