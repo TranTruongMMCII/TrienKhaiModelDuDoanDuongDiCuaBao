@@ -95,9 +95,9 @@ data:
   key_forecast_hours: [24, 48, 72] # 24h, 48h, 72h forecasts
   # Data split by year (paper methodology)
   split_by_year: true
-  train_years: [2020, 2023] # Training: 2020-2023
-  val_years: [2024, 2024] # Validation: 2024
-  test_years: [2025, 2026] # Test: 2025-2026
+  train_years: [2015, 2022] # Training: 2020-2023
+  val_years: [2023, 2023] # Validation: 2024
+  test_years: [2024, 2026] # Test: 2025-2026
   # Alternative ratio-based split (if split_by_year is false)
   train_ratio: 0.7
   val_ratio: 0.15
