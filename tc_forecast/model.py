@@ -215,32 +215,22 @@ class TCForecastModel:
         Architecture from paper (gru_cnn_uv_sst_p_track.py):
 
         Branch 1 - GRU (Track):
-            Input: (8, 11) → GRU(128, relu, return_seq=True) → GRU(32, relu) → Output: (32,)
+            Input (8, 11) -> GRU(128, relu, return_seq=True) -> GRU(32, relu)
 
         Branch 2 - CNN UV:
-            Input: (8, 21, 21) → Conv2D(32) → MaxPool → Conv2D(64) → MaxPool
-            → Conv2D(128) → MaxPool → Flatten → Dense(64)
+            Input (C, 21, 21) -> Permute -> Conv2D(16, 9x9, s=3, relu) -> BN
+            -> MaxPool(3x3, s=2) -> Flatten -> Dense(128) -> Dense(32)
 
         Branch 3 - CNN SST:
-            Input: (1, 21, 21) → Conv2D(16) → MaxPool → Conv2D(32) → MaxPool
-            → Conv2D(64) → MaxPool → Flatten → Dense(32)
+            Input (1, 21, 21) -> Permute -> Conv2D(8, 9x9, s=3, relu) -> BN
+            -> MaxPool(3x3, s=2) -> Flatten -> Dense(128) -> Dense(32)
 
         Branch 4 - CNN Z:
-            Input: (3, 46, 81) → Conv2D(32) → MaxPool → Conv2D(64) → MaxPool
-            → Conv2D(128) → MaxPool → Flatten → Dense(64)
+            Input (3, H, W) -> Permute -> Conv2D(16, adapted kernel) -> BN
+            -> MaxPool -> Flatten -> Dense(128) -> Dense(32)
 
-        Merge: Concatenate all → Dense(128, relu) → Dense(64, relu) → Dense(24, linear)
-
-        Args:
-            track_shape: Track data shape (seq_len, n_features)
-            uv_shape: UV data shape (channels, height, width)
-            sst_shape: SST data shape (channels, height, width)
-            z_shape: Z data shape (channels, height, width)
-
-        Returns:
-            Keras Model
+        Merge: Concatenate -> Dense(24, relu)
         """
-        # Default shapes from paper
         if track_shape is None:
             seq_len = self.data_config.sequence_length
             n_features = 11 if self.data_config.get('use_top_11', True) else 19
@@ -266,95 +256,71 @@ class TCForecastModel:
             z_shape = (z_config['channels'],
                        z_config['height'], z_config['width'])
 
-        gru_config = self.model_config.gru
-        dense_config = self.model_config.dense
         output_config = self.model_config.output
 
-        # ==================== Input Layers ====================
+        # Input layers
         track_input = layers.Input(shape=track_shape, name='track_input')
         uv_input = layers.Input(shape=uv_shape, name='uv_input')
         sst_input = layers.Input(shape=sst_shape, name='sst_input')
         z_input = layers.Input(shape=z_shape, name='z_input')
 
-        # ==================== Branch 1: GRU (Track) ====================
-        gru_x = track_input
-        hidden_units = gru_config.hidden_units
-        return_sequences = gru_config.return_sequences
-        gru_dropout = gru_config.dropout
-        gru_activation = gru_config.activation
+        # Branch 1: GRU (Track) - paper: GRU(128) -> GRU(32), no dropout
+        gru_x = layers.GRU(128, return_sequences=True, activation='relu',
+                           name='gru_1')(track_input)
+        gru_x = layers.GRU(32, return_sequences=False, activation='relu',
+                           name='gru_2')(gru_x)
 
-        for i, (units, return_seq) in enumerate(zip(hidden_units, return_sequences)):
-            gru_x = layers.GRU(
-                units=units,
-                return_sequences=return_seq,
-                activation=gru_activation,
-                dropout=gru_dropout,
-                name=f'gru_{i+1}'
-            )(gru_x)
-
-        # ==================== Branch 2: CNN UV ====================
-        uv_cnn_config = self.model_config.get('cnn_uv', {
-            'filters': [32, 64, 128],
-            'kernel_sizes': [[3, 3], [3, 3], [3, 3]],
-            'pool_sizes': [[2, 2], [2, 2], [2, 2]],
-            'activation': 'relu',
-            'dropout': 0.2
-        })
-
-        # Transpose from (channels, H, W) to (H, W, channels) for Conv2D
+        # Branch 2: CNN UV - paper: Conv2D(16, 9x9, s=3) -> BN -> MaxPool(3,3, s=2)
         uv_x = layers.Permute((2, 3, 1), name='uv_permute')(uv_input)
-        uv_x = self._build_cnn_branch(
-            uv_x, uv_cnn_config, 'uv', dense_units=64)
+        uv_x = layers.Conv2D(16, (9, 9), strides=3, activation='relu',
+                             name='uv_conv')(uv_x)
+        uv_x = layers.BatchNormalization(name='uv_bn')(uv_x)
+        uv_x = layers.MaxPooling2D((3, 3), strides=2,
+                                   name='uv_pool')(uv_x)
+        uv_x = layers.Flatten(name='uv_flatten')(uv_x)
+        uv_x = layers.Dense(128, activation='relu', name='uv_dense1')(uv_x)
+        uv_x = layers.Dense(32, activation='relu', name='uv_dense2')(uv_x)
 
-        # ==================== Branch 3: CNN SST ====================
-        sst_cnn_config = self.model_config.get('cnn_sst', {
-            'filters': [16, 32, 64],
-            'kernel_sizes': [[3, 3], [3, 3], [3, 3]],
-            'pool_sizes': [[2, 2], [2, 2], [2, 2]],
-            'activation': 'relu',
-            'dropout': 0.2
-        })
-
+        # Branch 3: CNN SST - paper: Conv2D(8, 9x9, s=3) -> BN -> MaxPool(3,3, s=2)
         sst_x = layers.Permute((2, 3, 1), name='sst_permute')(sst_input)
-        sst_x = self._build_cnn_branch(
-            sst_x, sst_cnn_config, 'sst', dense_units=32)
+        sst_x = layers.Conv2D(8, (9, 9), strides=3, activation='relu',
+                              name='sst_conv')(sst_x)
+        sst_x = layers.BatchNormalization(name='sst_bn')(sst_x)
+        sst_x = layers.MaxPooling2D((3, 3), strides=2,
+                                    name='sst_pool')(sst_x)
+        sst_x = layers.Flatten(name='sst_flatten')(sst_x)
+        sst_x = layers.Dense(128, activation='relu', name='sst_dense1')(sst_x)
+        sst_x = layers.Dense(32, activation='relu', name='sst_dense2')(sst_x)
 
-        # ==================== Branch 4: CNN Z ====================
-        z_cnn_config = self.model_config.get('cnn_z', {
-            'filters': [32, 64, 128],
-            'kernel_sizes': [[3, 3], [3, 3], [3, 3]],
-            'pool_sizes': [[2, 2], [2, 2], [2, 2]],
-            'activation': 'relu',
-            'dropout': 0.2
-        })
-
+        # Branch 4: CNN Z - paper: Conv2D(16, 14x25, s=4) for 46x81 grid
+        # Adapted kernel for smaller grids
         z_x = layers.Permute((2, 3, 1), name='z_permute')(z_input)
-        z_x = self._build_cnn_branch(z_x, z_cnn_config, 'z', dense_units=64)
+        z_h, z_w = z_shape[1], z_shape[2]
+        if z_h >= 46 and z_w >= 81:
+            z_x = layers.Conv2D(16, (14, 25), strides=4,
+                                name='z_conv')(z_x)
+            z_x = layers.BatchNormalization(name='z_bn')(z_x)
+            z_x = layers.MaxPooling2D((5, 11), strides=2,
+                                      name='z_pool')(z_x)
+        else:
+            z_x = layers.Conv2D(16, (5, 5), strides=2,
+                                name='z_conv')(z_x)
+            z_x = layers.BatchNormalization(name='z_bn')(z_x)
+            z_x = layers.MaxPooling2D((2, 2), strides=2,
+                                      name='z_pool')(z_x)
+        z_x = layers.Flatten(name='z_flatten')(z_x)
+        z_x = layers.Dense(128, activation='relu', name='z_dense1')(z_x)
+        z_x = layers.Dense(32, activation='relu', name='z_dense2')(z_x)
 
-        # ==================== Merge All Branches ====================
+        # Merge all branches -> output (paper: concat -> Dense(24, relu))
         merged = layers.Concatenate(name='merge_all')(
-            [gru_x, uv_x, sst_x, z_x])
+            [uv_x, sst_x, z_x, gru_x])
 
-        # ==================== Dense Layers ====================
-        dense_units_list = dense_config.units
-        dense_activation = dense_config.activation
-        dense_dropout = dense_config.dropout
-
-        x = merged
-        for i, units in enumerate(dense_units_list):
-            x = layers.Dense(units, activation=dense_activation,
-                             name=f'dense_{i+1}')(x)
-            if dense_dropout > 0:
-                x = layers.Dropout(dense_dropout, name=f'dropout_{i+1}')(x)
-
-        # ==================== Output Layer ====================
-        output_units = output_config.units  # 24 = 12 steps × 2 (lat/lon)
+        output_units = output_config.units
         output_activation = output_config.activation
+        outputs = layers.Dense(output_units, activation=output_activation,
+                               name='output')(merged)
 
-        outputs = layers.Dense(
-            output_units, activation=output_activation, name='output')(x)
-
-        # Create model
         model = Model(
             inputs=[track_input, uv_input, sst_input, z_input],
             outputs=outputs,
@@ -362,54 +328,6 @@ class TCForecastModel:
         )
 
         return model
-
-    def _build_cnn_branch(self, x, cnn_config: Dict, branch_name: str,
-                          dense_units: int = 64) -> layers.Layer:
-        """
-        Build a CNN branch for environmental data.
-
-        Args:
-            x: Input tensor (H, W, C) after permute
-            cnn_config: CNN configuration dict
-            branch_name: Name prefix for layers
-            dense_units: Units for final dense layer
-
-        Returns:
-            Output tensor after CNN processing
-        """
-        filters = cnn_config.get('filters', [32, 64, 128])
-        kernel_sizes = cnn_config.get('kernel_sizes', [[3, 3], [3, 3], [3, 3]])
-        pool_sizes = cnn_config.get('pool_sizes', [[2, 2], [2, 2], [2, 2]])
-        activation = cnn_config.get('activation', 'relu')
-        dropout = cnn_config.get('dropout', 0.2)
-
-        for i, (n_filters, kernel_size, pool_size) in enumerate(zip(filters, kernel_sizes, pool_sizes)):
-            x = layers.Conv2D(
-                filters=n_filters,
-                kernel_size=tuple(kernel_size) if isinstance(
-                    kernel_size, list) else kernel_size,
-                activation=activation,
-                padding='same',
-                name=f'{branch_name}_conv_{i+1}'
-            )(x)
-            x = layers.BatchNormalization(name=f'{branch_name}_bn_{i+1}')(x)
-
-            # Only apply pooling if dimensions allow
-            pool_size_tuple = tuple(pool_size) if isinstance(
-                pool_size, list) else (pool_size, pool_size)
-            x = layers.MaxPooling2D(pool_size=pool_size_tuple, padding='same',
-                                    name=f'{branch_name}_pool_{i+1}')(x)
-
-            if dropout > 0:
-                x = layers.Dropout(
-                    dropout, name=f'{branch_name}_drop_{i+1}')(x)
-
-        # Flatten and dense
-        x = layers.Flatten(name=f'{branch_name}_flatten')(x)
-        x = layers.Dense(dense_units, activation=activation,
-                         name=f'{branch_name}_dense')(x)
-
-        return x
 
     def _compile_model(self):
         """Compile model with optimizer, loss, and metrics from config."""
