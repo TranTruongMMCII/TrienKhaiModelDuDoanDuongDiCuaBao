@@ -6,11 +6,13 @@
 data:
   # Data paths (relative to tc_forecast folder or absolute)
   # IBTrACS track data
-  ibtracs_path: '../data/IBTrACS_Cleaned_Data_v2.csv'
-  # Atmospheric data directory containing period folders (2020-2024, 2025-2029, etc.)
-  # Each period folder has sst/, uv/, z/ subfolders
-  atmospheric_data_dir: '../data'
-  # Column mappings for IBTrACS_Cleaned_Data.csv
+  ibtracs_path:
+    '../data/IBTrACS_Cleaned_Data_v2.csv'
+    # Atmospheric data directory containing period folders (2020-2024, 2025-2029, etc.)
+    # Each period folder has sst/, uv/, z/ subfolders
+  atmospheric_data_dir:
+    '../data'
+    # Column mappings for IBTrACS_Cleaned_Data.csv
   columns:
     storm_id: 'STORM_ID'
     name: 'NAME'
@@ -95,9 +97,9 @@ data:
   key_forecast_hours: [24, 48, 72] # 24h, 48h, 72h forecasts
   # Data split by year (paper methodology)
   split_by_year: true
-  train_years: [2005, 2021] # Training: 2020-2023
-  val_years: [2022, 2023] # Validation: 2024
-  test_years: [2024, 2026] # Test: 2025-2026
+  train_years: [2005, 2021] # Training: 2005-2021
+  val_years: [2022, 2023] # Validation: 2022-2023
+  test_years: [2024, 2029] # Test: 2024-2029
   # Alternative ratio-based split (if split_by_year is false)
   train_ratio: 0.7
   val_ratio: 0.15
@@ -111,11 +113,11 @@ model:
   # ===== GRU Branch Configuration (for track data) =====
   gru:
     hidden_units: [128, 32]
-    dropout: 0.2
+    dropout: 0.0
     recurrent_dropout: 0.0
     return_sequences: [true, false]
     activation: 'relu'
-    learning_rate: 0.001 # Separate learning rate for GRU branch
+    learning_rate: 0.001
   # ===== CNN Branches Configuration (for environmental data) =====
   # UV CNN: 8 input channels → Conv2D layers
   cnn_uv:
@@ -141,27 +143,23 @@ model:
     activation: 'relu'
     dropout: 0.2
     learning_rate: 0.0001
-  # Dense layers after concatenation
   dense:
     units: [128, 64]
     activation: 'relu'
-    dropout: 0.3
-  # Output layer: 12 steps × 2 (lat/lon offsets) = 24 values
+    dropout: 0.0
   output:
-    units: 24 # 12 forecast steps × 2 (lat, lon)
-    activation: 'linear'
+    units: 24
+    activation: 'relu'
 
 training:
-  batch_size: 32
+  batch_size: 16
   epochs: 100
-  # Multi-optimizer configuration (paper uses different LR per branch)
   use_multi_optimizer: true
   optimizer:
     type: 'adam'
-    # Global learning rate (used if use_multi_optimizer is false)
     learning_rate:
-      initial: 0.001
-      decay_steps: 2280 # From paper
+      initial: 0.0001
+      decay_steps: 2280
       decay_rate: 0.92
       schedule: 'exponential'
   # Loss function
@@ -205,3 +203,4 @@ seed: 325
 constants:
   earth_radius_km: 6371.0
   omega: 0.00007292 # Earth's angular velocity (rad/s)
+
