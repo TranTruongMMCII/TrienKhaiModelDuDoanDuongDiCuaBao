@@ -95,13 +95,13 @@ data:
   key_forecast_hours: [24, 48, 72] # 24h, 48h, 72h forecasts
   # Data split by year (paper methodology)
   split_by_year: true
-  train_years: [2005, 2021] # Training: 2020-2023
-  val_years: [2022, 2023] # Validation: 2024
-  test_years: [2024, 2026] # Test: 2025-2026
+  train_years: [1985, 2018] # Training: 1985-2018
+  val_years: [2019, 2021] # Validation: 2019-2021
+  test_years: [2022, 2026] # Test: 2022-2026
   # Alternative ratio-based split (if split_by_year is false)
   train_ratio: 0.7
-  val_ratio: 0.15
-  test_ratio: 0.15
+  val_ratio: 0.2
+  test_ratio: 0.1
   # Normalization
   normalize: true
   normalization_method: 'minmax' # minmax or standard
