@@ -126,19 +126,102 @@ class TCForecastModel:
         """
         model_type = self.model_config.type.upper()
 
-        if model_type == "GRU":
+        if model_type == "RNN":
+            self.model = self._build_rnn_only_model(track_shape)
+        elif model_type == "LSTM":
+            self.model = self._build_lstm_only_model(track_shape)
+        elif model_type == "GRU":
             self.model = self._build_gru_only_model(track_shape)
         elif model_type == "GRU_CNN":
             self.model = self._build_gru_cnn_model(
                 track_shape, uv_shape, sst_shape, z_shape)
         else:
             raise ValueError(
-                f"Unknown model type: {model_type}. Use 'GRU' or 'GRU_CNN'.")
+                f"Unknown model type: {model_type}. Use 'RNN', 'LSTM', 'GRU', or 'GRU_CNN'.")
 
         # Compile model
         self._compile_model()
 
         return self.model
+
+    def _get_default_track_shape(self):
+        seq_len = self.data_config.sequence_length
+        n_features = 11 if self.data_config.get('use_top_11', True) else 19
+        return (seq_len, n_features)
+
+    def _build_rnn_only_model(self, track_shape: Tuple[int, int] = None) -> Model:
+        if track_shape is None:
+            track_shape = self._get_default_track_shape()
+
+        gru_config = self.model_config.gru
+        dense_config = self.model_config.dense
+        output_config = self.model_config.output
+
+        inputs = layers.Input(shape=track_shape, name='track_input')
+        x = inputs
+
+        hidden_units = gru_config.hidden_units
+        return_sequences = gru_config.return_sequences
+        dropout = gru_config.dropout
+        recurrent_dropout = gru_config.get('recurrent_dropout', 0.0)
+        activation = gru_config.activation
+
+        for i, (units, return_seq) in enumerate(zip(hidden_units, return_sequences)):
+            x = layers.SimpleRNN(
+                units=units,
+                return_sequences=return_seq,
+                activation=activation,
+                dropout=dropout,
+                recurrent_dropout=recurrent_dropout,
+                name=f'rnn_{i+1}'
+            )(x)
+
+        for i, units in enumerate(dense_config.units):
+            x = layers.Dense(units, activation=dense_config.activation,
+                             name=f'dense_{i+1}')(x)
+            if dense_config.dropout > 0:
+                x = layers.Dropout(dense_config.dropout, name=f'dropout_{i+1}')(x)
+
+        outputs = layers.Dense(
+            output_config.units, activation=output_config.activation, name='output')(x)
+
+        return Model(inputs=inputs, outputs=outputs, name='TC_RNN_Model')
+
+    def _build_lstm_only_model(self, track_shape: Tuple[int, int] = None) -> Model:
+        if track_shape is None:
+            track_shape = self._get_default_track_shape()
+
+        gru_config = self.model_config.gru
+        dense_config = self.model_config.dense
+        output_config = self.model_config.output
+
+        inputs = layers.Input(shape=track_shape, name='track_input')
+        x = inputs
+
+        hidden_units = gru_config.hidden_units
+        return_sequences = gru_config.return_sequences
+        dropout = gru_config.dropout
+        recurrent_dropout = gru_config.get('recurrent_dropout', 0.0)
+
+        for i, (units, return_seq) in enumerate(zip(hidden_units, return_sequences)):
+            x = layers.LSTM(
+                units=units,
+                return_sequences=return_seq,
+                dropout=dropout,
+                recurrent_dropout=recurrent_dropout,
+                name=f'lstm_{i+1}'
+            )(x)
+
+        for i, units in enumerate(dense_config.units):
+            x = layers.Dense(units, activation=dense_config.activation,
+                             name=f'dense_{i+1}')(x)
+            if dense_config.dropout > 0:
+                x = layers.Dropout(dense_config.dropout, name=f'dropout_{i+1}')(x)
+
+        outputs = layers.Dense(
+            output_config.units, activation=output_config.activation, name='output')(x)
+
+        return Model(inputs=inputs, outputs=outputs, name='TC_LSTM_Model')
 
     def _build_gru_only_model(self, track_shape: Tuple[int, int] = None) -> Model:
         """
@@ -153,10 +236,7 @@ class TCForecastModel:
             Keras Model
         """
         if track_shape is None:
-            seq_len = self.data_config.sequence_length
-            # Use top 11 features by default
-            n_features = 11 if self.data_config.get('use_top_11', True) else 19
-            track_shape = (seq_len, n_features)
+            track_shape = self._get_default_track_shape()
 
         gru_config = self.model_config.gru
         dense_config = self.model_config.dense
@@ -258,74 +338,82 @@ class TCForecastModel:
 
         output_config = self.model_config.output
 
-        # Input layers
-        track_input = layers.Input(shape=track_shape, name='track_input')
-        uv_input = layers.Input(shape=uv_shape, name='uv_input')
-        sst_input = layers.Input(shape=sst_shape, name='sst_input')
-        z_input = layers.Input(shape=z_shape, name='z_input')
+        env_branches = self.model_config.get('env_branches', ['uv', 'sst', 'z'])
 
-        # Branch 1: GRU (Track) - paper: GRU(128) -> GRU(32), no dropout
+        # Track branch (always present)
+        track_input = layers.Input(shape=track_shape, name='track_input')
         gru_x = layers.GRU(128, return_sequences=True, activation='relu',
                            name='gru_1')(track_input)
         gru_x = layers.GRU(32, return_sequences=False, activation='relu',
                            name='gru_2')(gru_x)
 
-        # Branch 2: CNN UV - paper: Conv2D(16, 9x9, s=3) -> BN -> MaxPool(3,3, s=2)
-        uv_x = layers.Permute((2, 3, 1), name='uv_permute')(uv_input)
-        uv_x = layers.Conv2D(16, (9, 9), strides=3, activation='relu',
-                             name='uv_conv')(uv_x)
-        uv_x = layers.BatchNormalization(name='uv_bn')(uv_x)
-        uv_x = layers.MaxPooling2D((3, 3), strides=2,
-                                   name='uv_pool')(uv_x)
-        uv_x = layers.Flatten(name='uv_flatten')(uv_x)
-        uv_x = layers.Dense(128, activation='relu', name='uv_dense1')(uv_x)
-        uv_x = layers.Dense(32, activation='relu', name='uv_dense2')(uv_x)
+        all_inputs = [track_input]
+        branch_outputs = [gru_x]
+        model_name_parts = ['GRU']
 
-        # Branch 3: CNN SST - paper: Conv2D(8, 9x9, s=3) -> BN -> MaxPool(3,3, s=2)
-        sst_x = layers.Permute((2, 3, 1), name='sst_permute')(sst_input)
-        sst_x = layers.Conv2D(8, (9, 9), strides=3, activation='relu',
-                              name='sst_conv')(sst_x)
-        sst_x = layers.BatchNormalization(name='sst_bn')(sst_x)
-        sst_x = layers.MaxPooling2D((3, 3), strides=2,
-                                    name='sst_pool')(sst_x)
-        sst_x = layers.Flatten(name='sst_flatten')(sst_x)
-        sst_x = layers.Dense(128, activation='relu', name='sst_dense1')(sst_x)
-        sst_x = layers.Dense(32, activation='relu', name='sst_dense2')(sst_x)
+        # UV branch
+        if 'uv' in env_branches and uv_shape is not None:
+            uv_input = layers.Input(shape=uv_shape, name='uv_input')
+            uv_x = layers.Permute((2, 3, 1), name='uv_permute')(uv_input)
+            uv_x = layers.Conv2D(16, (9, 9), strides=3, activation='relu',
+                                 name='uv_conv')(uv_x)
+            uv_x = layers.BatchNormalization(name='uv_bn')(uv_x)
+            uv_x = layers.MaxPooling2D((3, 3), strides=2, name='uv_pool')(uv_x)
+            uv_x = layers.Flatten(name='uv_flatten')(uv_x)
+            uv_x = layers.Dense(128, activation='relu', name='uv_dense1')(uv_x)
+            uv_x = layers.Dense(32, activation='relu', name='uv_dense2')(uv_x)
+            all_inputs.append(uv_input)
+            branch_outputs.append(uv_x)
+            model_name_parts.append('UV')
 
-        # Branch 4: CNN Z - paper: Conv2D(16, 14x25, s=4) for 46x81 grid
-        # Adapted kernel for smaller grids
-        z_x = layers.Permute((2, 3, 1), name='z_permute')(z_input)
-        z_h, z_w = z_shape[1], z_shape[2]
-        if z_h >= 46 and z_w >= 81:
-            z_x = layers.Conv2D(16, (14, 25), strides=4,
-                                name='z_conv')(z_x)
-            z_x = layers.BatchNormalization(name='z_bn')(z_x)
-            z_x = layers.MaxPooling2D((5, 11), strides=2,
-                                      name='z_pool')(z_x)
+        # SST branch
+        if 'sst' in env_branches and sst_shape is not None:
+            sst_input = layers.Input(shape=sst_shape, name='sst_input')
+            sst_x = layers.Permute((2, 3, 1), name='sst_permute')(sst_input)
+            sst_x = layers.Conv2D(8, (9, 9), strides=3, activation='relu',
+                                  name='sst_conv')(sst_x)
+            sst_x = layers.BatchNormalization(name='sst_bn')(sst_x)
+            sst_x = layers.MaxPooling2D((3, 3), strides=2, name='sst_pool')(sst_x)
+            sst_x = layers.Flatten(name='sst_flatten')(sst_x)
+            sst_x = layers.Dense(128, activation='relu', name='sst_dense1')(sst_x)
+            sst_x = layers.Dense(32, activation='relu', name='sst_dense2')(sst_x)
+            all_inputs.append(sst_input)
+            branch_outputs.append(sst_x)
+            model_name_parts.append('SST')
+
+        # Z branch
+        if 'z' in env_branches and z_shape is not None:
+            z_input = layers.Input(shape=z_shape, name='z_input')
+            z_x = layers.Permute((2, 3, 1), name='z_permute')(z_input)
+            z_h, z_w = z_shape[1], z_shape[2]
+            if z_h >= 46 and z_w >= 81:
+                z_x = layers.Conv2D(16, (14, 25), strides=4, name='z_conv')(z_x)
+                z_x = layers.BatchNormalization(name='z_bn')(z_x)
+                z_x = layers.MaxPooling2D((5, 11), strides=2, name='z_pool')(z_x)
+            else:
+                z_x = layers.Conv2D(16, (5, 5), strides=2, name='z_conv')(z_x)
+                z_x = layers.BatchNormalization(name='z_bn')(z_x)
+                z_x = layers.MaxPooling2D((2, 2), strides=2, name='z_pool')(z_x)
+            z_x = layers.Flatten(name='z_flatten')(z_x)
+            z_x = layers.Dense(128, activation='relu', name='z_dense1')(z_x)
+            z_x = layers.Dense(32, activation='relu', name='z_dense2')(z_x)
+            all_inputs.append(z_input)
+            branch_outputs.append(z_x)
+            model_name_parts.append('Z')
+
+        # Merge
+        if len(branch_outputs) > 1:
+            merged = layers.Concatenate(name='merge_all')(branch_outputs)
         else:
-            z_x = layers.Conv2D(16, (5, 5), strides=2,
-                                name='z_conv')(z_x)
-            z_x = layers.BatchNormalization(name='z_bn')(z_x)
-            z_x = layers.MaxPooling2D((2, 2), strides=2,
-                                      name='z_pool')(z_x)
-        z_x = layers.Flatten(name='z_flatten')(z_x)
-        z_x = layers.Dense(128, activation='relu', name='z_dense1')(z_x)
-        z_x = layers.Dense(32, activation='relu', name='z_dense2')(z_x)
-
-        # Merge all branches -> output (paper: concat -> Dense(24, relu))
-        merged = layers.Concatenate(name='merge_all')(
-            [uv_x, sst_x, z_x, gru_x])
+            merged = branch_outputs[0]
 
         output_units = output_config.units
         output_activation = output_config.activation
         outputs = layers.Dense(output_units, activation=output_activation,
                                name='output')(merged)
 
-        model = Model(
-            inputs=[track_input, uv_input, sst_input, z_input],
-            outputs=outputs,
-            name='TC_GRU_CNN_Model'
-        )
+        model_name = 'TC_' + '_'.join(model_name_parts) + '_Model'
+        model = Model(inputs=all_inputs, outputs=outputs, name=model_name)
 
         return model
 
@@ -357,7 +445,11 @@ class TCForecastModel:
 
         # Get loss
         loss = training_config.loss
-        if loss == 'mse':
+        if loss == 'rmse':
+            def rmse_loss(y_true, y_pred):
+                return tf.sqrt(tf.reduce_mean(tf.square(y_true - y_pred)))
+            loss_fn = rmse_loss
+        elif loss == 'mse':
             loss_fn = 'mean_squared_error'
         elif loss == 'mae':
             loss_fn = 'mean_absolute_error'
