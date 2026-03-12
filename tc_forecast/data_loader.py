@@ -564,11 +564,20 @@ class TCDataLoader:
                 X_list.append(X_seq)
                 y_list.append(y_seq)
 
+                # Extract year from the last timestep of the input sequence
+                time_col = self.data_config.columns.timestamp
+                seq_time = seq_df[time_col].iloc[-1]
+                try:
+                    seq_year = int(pd.Timestamp(seq_time).year)
+                except Exception:
+                    seq_year = None
+
                 metadata_list.append({
                     'storm_id': storm_id,
                     'seq_start_idx': i,
                     'last_lat': last_lat,
-                    'last_lon': last_lon
+                    'last_lon': last_lon,
+                    'year': seq_year
                 })
 
         X = np.array(X_list, dtype=np.float32)
@@ -783,31 +792,60 @@ class TCDataLoader:
         val_years = self.data_config.get('val_years', [2015, 2018])
         test_years = self.data_config.get('test_years', [2019, 2021])
 
-        # Extract year from metadata if available, otherwise use indices
         n_samples = len(X)
 
-        # Simple ratio-based split if year info not available
-        train_end = int(n_samples * 0.7)
-        val_end = int(n_samples * 0.85)
+        # Check if year info is available in metadata
+        has_years = metadata and metadata[0].get('year') is not None
 
-        # Track data split
-        X_train, y_train = X[:train_end], y[:train_end]
-        X_val, y_val = X[train_end:val_end], y[train_end:val_end]
-        X_test, y_test = X[val_end:], y[val_end:]
+        if has_years:
+            years = np.array([m['year'] for m in metadata])
+            train_mask = (years >= train_years[0]) & (years <= train_years[1])
+            val_mask = (years >= val_years[0]) & (years <= val_years[1])
+            test_mask = (years >= test_years[0]) & (years <= test_years[1])
 
-        metadata_train = metadata[:train_end]
-        metadata_val = metadata[train_end:val_end]
-        metadata_test = metadata[val_end:]
+            train_idx = np.where(train_mask)[0]
+            val_idx = np.where(val_mask)[0]
+            test_idx = np.where(test_mask)[0]
 
-        # Environmental data split
-        env_train = env_val = env_test = None
-        if env_data:
-            env_train = {k: v[:train_end] for k, v in env_data.items()}
-            env_val = {k: v[train_end:val_end] for k, v in env_data.items()}
-            env_test = {k: v[val_end:] for k, v in env_data.items()}
+            X_train, y_train = X[train_idx], y[train_idx]
+            X_val, y_val = X[val_idx], y[val_idx]
+            X_test, y_test = X[test_idx], y[test_idx]
 
-        print(
-            f"Data split - Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
+            metadata_train = [metadata[i] for i in train_idx]
+            metadata_val = [metadata[i] for i in val_idx]
+            metadata_test = [metadata[i] for i in test_idx]
+
+            if env_data:
+                env_train = {k: v[train_idx] for k, v in env_data.items()}
+                env_val = {k: v[val_idx] for k, v in env_data.items()}
+                env_test = {k: v[test_idx] for k, v in env_data.items()}
+            else:
+                env_train = env_val = env_test = None
+
+            print(f"Year-based split - Train({train_years}): {len(X_train)}, "
+                  f"Val({val_years}): {len(X_val)}, Test({test_years}): {len(X_test)}")
+        else:
+            # Fallback: ratio-based split
+            train_end = int(n_samples * 0.7)
+            val_end = int(n_samples * 0.85)
+
+            X_train, y_train = X[:train_end], y[:train_end]
+            X_val, y_val = X[train_end:val_end], y[train_end:val_end]
+            X_test, y_test = X[val_end:], y[val_end:]
+
+            metadata_train = metadata[:train_end]
+            metadata_val = metadata[train_end:val_end]
+            metadata_test = metadata[val_end:]
+
+            if env_data:
+                env_train = {k: v[:train_end] for k, v in env_data.items()}
+                env_val = {k: v[train_end:val_end] for k, v in env_data.items()}
+                env_test = {k: v[val_end:] for k, v in env_data.items()}
+            else:
+                env_train = env_val = env_test = None
+
+            print(f"WARNING: No year info in metadata, using ratio split 70/15/15")
+            print(f"Ratio split - Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
 
         return (X_train, y_train, X_val, y_val, X_test, y_test,
                 metadata_train, metadata_val, metadata_test,
