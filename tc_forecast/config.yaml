@@ -109,7 +109,8 @@ data:
   normalization_method: 'minmax' # minmax or standard
 
 model:
-  type: 'GRU_CNN' # Options: "GRU", "GRU_CNN"
+  type: 'GRU_CNN' # Options: "RNN", "LSTM", "GRU", "GRU_CNN"
+  env_branches: ['uv', 'sst', 'z']  # Which env branches to use (for GRU_CNN ablation)
   # ===== GRU Branch Configuration (for track data) =====
   gru:
     hidden_units: [128, 32]
@@ -163,7 +164,7 @@ training:
       decay_rate: 0.92
       schedule: 'exponential'
   # Loss function
-  loss: 'mse'
+  loss: 'rmse'
   metrics: ['mae', 'mse']
   # Callbacks
   callbacks:
