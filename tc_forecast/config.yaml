@@ -22,7 +22,7 @@ data:
     storm_direction: 'STORM_DIR'
     storm_speed: 'STORM_SPEED'
     wind_speed: 'WMO_WIND'
-    pressure: 'WMO_PRE'
+    pressure: 'WMO_PRES'
     landfall: 'LANDFALL'
   # ===== 19 RAW FEATURES (computed from IBTrACS) =====
   # These are derived from basic IBTrACS columns, not directly read
